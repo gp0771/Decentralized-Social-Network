@@ -354,4 +354,5 @@ obtaining a copy of this software and associated documentation files...
 
 [⭐ Star this repo](https://github.com/your-username/decentralized-social-network) • [🍴 Fork it](https://github.com/your-username/decentralized-social-network/fork) • [📖 Read the docs](https://docs.yourdomain.com)
 
-</div>
+</div>![Screenshot (24)](https://github.com/user-attachments/assets/6757b65e-7df2-4202-9323-190eb47afa18)
+
