@@ -56,7 +56,7 @@ contract DecentralizedSocialNetwork {
             userAddress: msg.sender,
             username: _username,
             bio: _bio,
-            postCount: 0,
+            postCount: 0
             exists: true
         });
         
