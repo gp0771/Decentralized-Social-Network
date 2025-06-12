@@ -8,7 +8,7 @@ contract DecentralizedSocialNetwork {
         string content;
         uint256 timestamp;
         uint256 likes;
-        bool exists;
+        bool exist
     
     struct User {
         address userAddress;
