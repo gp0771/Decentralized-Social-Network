@@ -16,6 +16,13 @@ contract DecentralizedSocialNetwork {
         string bio;
         uint256 postCount;
         bool exists;
+
+struct User {
+        address userAddress;
+        string username;
+        string bio;
+        uint256 postCount;
+        bool exists;
     }
     
     mapping(address => User) public users;
