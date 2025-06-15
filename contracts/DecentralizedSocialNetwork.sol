@@ -11,7 +11,7 @@ contract DecentralizedSocialNetwork {
         bool exist
     contract DecentralizedSocialNetwork {
     struct Post {
-        uint256 id;
+        
         address author;
         string content;
         uint256 timestamp;
