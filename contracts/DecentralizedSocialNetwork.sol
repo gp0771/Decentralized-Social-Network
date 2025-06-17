@@ -9,7 +9,7 @@ contract DecentralizedSocialNetwork {
         uint256 timestamp;
         uint256 likes;
         bool exist
-    contract DecentralizedSocialNetwork {
+    contract DecentralizedSocial
     struct Post {
         
         address author;
