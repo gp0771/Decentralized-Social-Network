@@ -13,8 +13,7 @@ contract DecentralizedSocialNetwork {
     struct Post {
         
         address author;
-        string content;
-        uint256 timestamp;
+        string
         uint256 likes;
         bool exist
     
