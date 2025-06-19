@@ -6,10 +6,6 @@ contract DecentralizedSocialNetwork {
         uint256 id;
         address author;
         string content;
-        uint256 timestamp;
-        uint256 likes;
-        bool exist
-    contract DecentralizedSocial
     struct Post {
         
         address author;
