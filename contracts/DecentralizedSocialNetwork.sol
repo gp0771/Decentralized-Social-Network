@@ -136,9 +136,7 @@ struct User {
     function getLatestPosts(uint256 _count) external view returns (Post[] memory) {
         require(_count > 0 && _count <= 50, "Invalid count range");
         
-        uint256 count = _count > totalPosts ? totalPosts : _count;
-        Post[] memory latestPosts = new Post[](count);
-        
+       
         for (uint256 i = 0; i < count; i++) {
             latestPosts[i] = posts[totalPosts - i];
         }
