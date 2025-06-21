@@ -77,14 +77,7 @@ struct User {
      * @dev Create a new post
      * @param _content Content of the post
      */
-    function createPost(string memory _content) external onlyRegisteredUser {
-        require(bytes(_content).length > 0, "Post content cannot be empty");
-        require(bytes(_content).length <= 500, "Post content too long");
-        
-        totalPosts++;
-        uint256 postId = totalPosts;
-        
-        posts[postId] = Post({
+
             id: postId,
             author: msg.sender,
             content: _content,
