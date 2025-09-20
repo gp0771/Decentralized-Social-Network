@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: mit
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
 contract DecentralizedSocialNetwork {
@@ -18,6 +18,8 @@ contract DecentralizedSocialNetwork {
         string bio;
         uint256 postCount;
         uint256 commentCount;
+        uint256 followerCount;
+        uint256 followingCount;
         bool exists;
     }
 
@@ -42,10 +44,18 @@ contract DecentralizedSocialNetwork {
     mapping(address => uint256[]) public userComments;
     mapping(uint256 => uint256[]) public postComments; // postId => commentIds
     mapping(uint256 => uint256[]) public commentReplies; // commentId => replyIds
+    
+    // Follow System Mappings
+    mapping(address => mapping(address => bool)) public isFollowing; // follower => following => bool
+    mapping(address => address[]) public followers; // user => followers array
+    mapping(address => address[]) public following; // user => following array
+    mapping(address => mapping(address => uint256)) public followingIndex; // for efficient removal
+    mapping(address => mapping(address => uint256)) public followerIndex; // for efficient removal
 
     uint256 public totalPosts;
     uint256 public totalUsers;
     uint256 public totalComments;
+    uint256 public totalFollowRelations;
 
     event UserRegistered(address indexed user, string username);
     event PostCreated(uint256 indexed postId, address indexed author, string content);
@@ -55,6 +65,8 @@ contract DecentralizedSocialNetwork {
     event CommentLiked(uint256 indexed commentId, address indexed liker);
     event CommentUnliked(uint256 indexed commentId, address indexed unliker);
     event ReplyCreated(uint256 indexed replyId, uint256 indexed parentCommentId, address indexed author, string content);
+    event UserFollowed(address indexed follower, address indexed following);
+    event UserUnfollowed(address indexed follower, address indexed unfollowing);
 
     modifier onlyRegisteredUser() {
         require(users[msg.sender].exists, "User not registered");
@@ -71,6 +83,11 @@ contract DecentralizedSocialNetwork {
         _;
     }
 
+    modifier validUser(address _userAddress) {
+        require(users[_userAddress].exists, "User does not exist");
+        _;
+    }
+
     // Register a new user
     function registerUser(string memory _username, string memory _bio) external {
         require(!users[msg.sender].exists, "User already registered");
@@ -84,6 +101,8 @@ contract DecentralizedSocialNetwork {
             bio: _bio,
             postCount: 0,
             commentCount: 0,
+            followerCount: 0,
+            followingCount: 0,
             exists: true
         });
 
@@ -198,6 +217,65 @@ contract DecentralizedSocialNetwork {
         }
     }
 
+    // Follow a user
+    function followUser(address _userToFollow) external onlyRegisteredUser validUser(_userToFollow) {
+        require(_userToFollow != msg.sender, "Cannot follow yourself");
+        require(!isFollowing[msg.sender][_userToFollow], "Already following this user");
+
+        // Add to following array and set index
+        following[msg.sender].push(_userToFollow);
+        followingIndex[msg.sender][_userToFollow] = following[msg.sender].length - 1;
+
+        // Add to followers array and set index
+        followers[_userToFollow].push(msg.sender);
+        followerIndex[_userToFollow][msg.sender] = followers[_userToFollow].length - 1;
+
+        // Update follow status and counts
+        isFollowing[msg.sender][_userToFollow] = true;
+        users[msg.sender].followingCount++;
+        users[_userToFollow].followerCount++;
+        totalFollowRelations++;
+
+        emit UserFollowed(msg.sender, _userToFollow);
+    }
+
+    // Unfollow a user
+    function unfollowUser(address _userToUnfollow) external onlyRegisteredUser validUser(_userToUnfollow) {
+        require(isFollowing[msg.sender][_userToUnfollow], "Not following this user");
+
+        // Remove from following array
+        uint256 followingIdx = followingIndex[msg.sender][_userToUnfollow];
+        uint256 lastFollowingIdx = following[msg.sender].length - 1;
+        
+        if (followingIdx != lastFollowingIdx) {
+            address lastFollowing = following[msg.sender][lastFollowingIdx];
+            following[msg.sender][followingIdx] = lastFollowing;
+            followingIndex[msg.sender][lastFollowing] = followingIdx;
+        }
+        following[msg.sender].pop();
+        delete followingIndex[msg.sender][_userToUnfollow];
+
+        // Remove from followers array
+        uint256 followerIdx = followerIndex[_userToUnfollow][msg.sender];
+        uint256 lastFollowerIdx = followers[_userToUnfollow].length - 1;
+        
+        if (followerIdx != lastFollowerIdx) {
+            address lastFollower = followers[_userToUnfollow][lastFollowerIdx];
+            followers[_userToUnfollow][followerIdx] = lastFollower;
+            followerIndex[_userToUnfollow][lastFollower] = followerIdx;
+        }
+        followers[_userToUnfollow].pop();
+        delete followerIndex[_userToUnfollow][msg.sender];
+
+        // Update follow status and counts
+        isFollowing[msg.sender][_userToUnfollow] = false;
+        users[msg.sender].followingCount--;
+        users[_userToUnfollow].followerCount--;
+        totalFollowRelations--;
+
+        emit UserUnfollowed(msg.sender, _userToUnfollow);
+    }
+
     // Get a user profile
     function getUser(address _userAddress) external view returns (User memory) {
         require(users[_userAddress].exists, "User does not exist");
@@ -250,6 +328,82 @@ contract DecentralizedSocialNetwork {
         return repliesArray;
     }
 
+    // Get followers of a user
+    function getFollowers(address _userAddress) external view validUser(_userAddress) returns (address[] memory) {
+        return followers[_userAddress];
+    }
+
+    // Get users that a user is following
+    function getFollowing(address _userAddress) external view validUser(_userAddress) returns (address[] memory) {
+        return following[_userAddress];
+    }
+
+    // Get follower count
+    function getFollowerCount(address _userAddress) external view validUser(_userAddress) returns (uint256) {
+        return users[_userAddress].followerCount;
+    }
+
+    // Get following count
+    function getFollowingCount(address _userAddress) external view validUser(_userAddress) returns (uint256) {
+        return users[_userAddress].followingCount;
+    }
+
+    // Check if user A follows user B
+    function checkFollowStatus(address _follower, address _following) external view returns (bool) {
+        return isFollowing[_follower][_following];
+    }
+
+    // Get posts from users that the caller follows (feed)
+    function getFollowingFeed(uint256 count) external view onlyRegisteredUser returns (Post[] memory) {
+        require(count > 0 && count <= 50, "Count must be between 1 and 50");
+
+        address[] memory userFollowing = following[msg.sender];
+        
+        // Count total posts from followed users
+        uint256 totalFeedPosts = 0;
+        for (uint256 i = 0; i < userFollowing.length; i++) {
+            totalFeedPosts += users[userFollowing[i]].postCount;
+        }
+
+        if (totalFeedPosts == 0) {
+            return new Post[](0);
+        }
+
+        // Create array to store all posts with timestamps
+        uint256[] memory allPostIds = new uint256[](totalFeedPosts);
+        uint256 postIndex = 0;
+
+        // Collect all post IDs from followed users
+        for (uint256 i = 0; i < userFollowing.length; i++) {
+            uint256[] memory userPostIds = userPosts[userFollowing[i]];
+            for (uint256 j = 0; j < userPostIds.length; j++) {
+                allPostIds[postIndex] = userPostIds[j];
+                postIndex++;
+            }
+        }
+
+        // Simple sorting by post ID (newer posts have higher IDs)
+        for (uint256 i = 0; i < allPostIds.length - 1; i++) {
+            for (uint256 j = 0; j < allPostIds.length - i - 1; j++) {
+                if (allPostIds[j] < allPostIds[j + 1]) {
+                    uint256 temp = allPostIds[j];
+                    allPostIds[j] = allPostIds[j + 1];
+                    allPostIds[j + 1] = temp;
+                }
+            }
+        }
+
+        // Return requested number of posts
+        uint256 resultCount = count > totalFeedPosts ? totalFeedPosts : count;
+        Post[] memory feedPosts = new Post[](resultCount);
+
+        for (uint256 i = 0; i < resultCount; i++) {
+            feedPosts[i] = posts[allPostIds[i]];
+        }
+
+        return feedPosts;
+    }
+
     // Get latest N posts (up to 50)
     function getLatestPosts(uint256 count) external view returns (Post[] memory) {
         require(count > 0 && count <= 50, "Count must be between 1 and 50");
@@ -291,16 +445,43 @@ contract DecentralizedSocialNetwork {
     }
 
     // Get total counts for dashboard/stats
-    function getStats() external view returns (uint256, uint256, uint256) {
-        return (totalUsers, totalPosts, totalComments);
+    function getStats() external view returns (uint256, uint256, uint256, uint256) {
+        return (totalUsers, totalPosts, totalComments, totalFollowRelations);
+    }
+
+    // Get mutual followers between two users
+    function getMutualFollowers(address _user1, address _user2) external view validUser(_user1) validUser(_user2) returns (address[] memory) {
+        address[] memory user1Followers = followers[_user1];
+        address[] memory user2Followers = followers[_user2];
+        
+        // Count mutual followers first
+        uint256 mutualCount = 0;
+        for (uint256 i = 0; i < user1Followers.length; i++) {
+            for (uint256 j = 0; j < user2Followers.length; j++) {
+                if (user1Followers[i] == user2Followers[j]) {
+                    mutualCount++;
+                    break;
+                }
+            }
+        }
+
+        // Create array for mutual followers
+        address[] memory mutualFollowers = new address[](mutualCount);
+        uint256 index = 0;
+        
+        for (uint256 i = 0; i < user1Followers.length; i++) {
+            for (uint256 j = 0; j < user2Followers.length; j++) {
+                if (user1Followers[i] == user2Followers[j]) {
+                    mutualFollowers[index] = user1Followers[i];
+                    index++;
+                    break;
+                }
+            }
+        }
+
+        return mutualFollowers;
     }
 }
-
-
-
-
-
-
 
 
 
