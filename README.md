@@ -11,7 +11,7 @@
 
 The **Decentralized Social Network** is a revolutionary blockchain-based social media platform that eliminates centralized control and puts users in complete ownership of their social interactions. Built on smart contracts, this platform provides transparency, immutability, and censorship resistance while maintaining the familiar social media experience users expect.
 
-Unlike traditional social media platforms that store user data on centralized servers, our decentralized approach stores all user profiles, posts, and interactions directly on the blockchain, ensuring that no single entity can control, censor, or manipulate user content.
+Unlike traditional social media platforms that store user data on centralized servers, our decentralized approach stores all user profiles, posts, interactions, and conversations directly on the blockchain, ensuring that no single entity can control, censor, or manipulate user content.
 
 ## 🚀 Project Vision
 
@@ -38,15 +38,22 @@ Our vision is to democratize social media by creating a platform where:
 - **Content Ownership** - Creators retain full ownership of their content
 - **Quality Controls** - Built-in spam prevention and content length limits
 
+### 💬 **Threaded Comment System**
+- **Rich Discussions** - Comment on any post with threaded conversations
+- **Reply System** - Reply to comments to create nested discussion threads
+- **Comment Likes** - Independent like system for comments
+- **Real-time Engagement** - Track comment counts and engagement metrics
+- **Conversation History** - Complete comment history for all users
+
 ### ❤️ **Social Interactions**
-- **Transparent Voting** - Like/unlike system with verifiable vote counts
+- **Transparent Voting** - Like/unlike system for both posts and comments
 - **Anti-Manipulation** - Prevention of self-voting and spam
 - **Engagement Tracking** - Real-time, transparent engagement metrics
 - **Social Proof** - On-chain verification of all social interactions
 
 ### 🔍 **Data Transparency & Analytics**
 - **Public Verification** - All activities are publicly auditable
-- **Real-time Statistics** - Live user and content statistics
+- **Real-time Statistics** - Live user, post, and comment statistics
 - **Open Source** - Complete transparency of platform mechanics
 - **No Hidden Algorithms** - All ranking and sorting logic is public
 
@@ -58,44 +65,68 @@ DecentralizedSocialNetwork.sol
 ├── 👥 User Management
 │   ├── registerUser(username, bio)
 │   ├── getUser(address)
-│   └── getUserPosts(address)
+│   ├── getUserPosts(address)
+│   └── getUserComments(address)
 ├── 📄 Content Management  
 │   ├── createPost(content)
 │   ├── getPost(postId)
 │   └── getLatestPosts(count)
+├── 💬 Comment System
+│   ├── createComment(postId, content)
+│   ├── replyToComment(commentId, content)
+│   ├── getPostComments(postId)
+│   ├── getCommentReplies(commentId)
+│   └── getLatestPostComments(postId, count)
 └── 💫 Social Interactions
-    ├── toggleLike(postId)
-    └── hasLiked(postId, user)
+    ├── togglePostLike(postId)
+    ├── toggleCommentLike(commentId)
+    ├── hasUserLikedPost(postId, user)
+    └── hasUserLikedComment(commentId, user)
 ```
 
 ### Core Smart Contract Functions
 
-#### 1. **`registerUser(string username, string bio)`**
+#### 1. **User Management**
 ```solidity
 // Register a new user with unique username and bio
 function registerUser(string memory _username, string memory _bio) external
-```
-- Creates user profile on-chain
-- Validates username uniqueness and length
-- Emits `UserRegistered` event for indexing
 
-#### 2. **`createPost(string content)`**
+// Get user profile including comment count
+function getUser(address _userAddress) external view returns (User memory)
+```
+
+#### 2. **Content Creation**
 ```solidity  
 // Create an immutable post with content validation
 function createPost(string memory _content) external onlyRegisteredUser
-```
-- Stores post content permanently on blockchain
-- Links posts to user profiles automatically
-- Enforces content quality and length limits
 
-#### 3. **`toggleLike(uint256 postId)`**
+// Create a comment on any post
+function createComment(uint256 _postId, string memory _content) external onlyRegisteredUser
+
+// Reply to an existing comment (threaded discussions)
+function replyToComment(uint256 _parentCommentId, string memory _content) external onlyRegisteredUser
+```
+
+#### 3. **Social Interactions**
 ```solidity
 // Like or unlike a post with spam prevention  
-function toggleLike(uint256 _postId) external onlyRegisteredUser validPost(_postId)
+function togglePostLike(uint256 _postId) external onlyRegisteredUser validPost(_postId)
+
+// Like or unlike a comment with spam prevention
+function toggleCommentLike(uint256 _commentId) external onlyRegisteredUser validComment(_commentId)
 ```
-- Toggle like/unlike status for posts
-- Prevents self-voting and duplicate voting
-- Updates engagement metrics in real-time
+
+#### 4. **Data Retrieval**
+```solidity
+// Get all comments for a specific post
+function getPostComments(uint256 _postId) external view returns (Comment[] memory)
+
+// Get all replies to a specific comment (threaded view)
+function getCommentReplies(uint256 _commentId) external view returns (Comment[] memory)
+
+// Get latest comments with pagination
+function getLatestPostComments(uint256 _postId, uint256 count) external view returns (Comment[] memory)
+```
 
 ### Data Structures
 ```solidity
@@ -104,6 +135,7 @@ struct User {
     string username;        // Unique username  
     string bio;            // User biography
     uint256 postCount;     // Total posts created
+    uint256 commentCount;  // Total comments made
     bool exists;           // Registration status
 }
 
@@ -113,23 +145,38 @@ struct Post {
     string content;       // Post content
     uint256 timestamp;    // Creation timestamp
     uint256 likes;        // Like count
+    uint256 commentCount; // Number of comments
     bool exists;          // Post validity
+}
+
+struct Comment {
+    uint256 id;              // Unique comment ID
+    uint256 postId;          // Parent post ID
+    address author;          // Comment author
+    string content;          // Comment content
+    uint256 timestamp;       // Creation timestamp
+    uint256 likes;           // Like count
+    uint256 parentCommentId; // Parent comment (0 for top-level)
+    uint256 replyCount;      // Number of replies
+    bool exists;             // Comment validity
 }
 ```
 
 ## 🛣️ Future Roadmap
 
 ### 🎯 **Phase 1: Enhanced Social Features** (Q2 2025)
-- **💬 Comments System** - Threaded discussions on posts
+- **✅ Comments System** - ~~Threaded discussions on posts~~ **COMPLETED**
 - **👥 Follow System** - Follow users and curated feeds  
 - **📩 Direct Messages** - Private messaging between users
 - **🏷️ Content Tags** - Categorization and discovery system
+- **🔍 Advanced Search** - Search posts, comments, and users
 
 ### 🎯 **Phase 2: Advanced Platform Features** (Q3 2025)
 - **🎨 NFT Integration** - Mint posts as collectible NFTs
 - **🪙 Token Economy** - Native platform token with rewards
 - **⭐ Reputation System** - Community-driven user reputation
 - **🛡️ Moderation Tools** - Decentralized content moderation
+- **📊 Comment Analytics** - Advanced comment engagement metrics
 
 ### 🎯 **Phase 3: Platform Expansion** (Q4 2025)
 - **📱 Mobile Applications** - Native iOS and Android apps
@@ -211,17 +258,35 @@ await contract.registerUser("alice_crypto", "Blockchain enthusiast and developer
 // Create your first post  
 await contract.createPost("Hello, decentralized world! 🌍");
 
-// Like someone's post
-await contract.toggleLike(1);
+// Comment on a post
+await contract.createComment(1, "Great post! Welcome to the decentralized future!");
 
-// Get user profile
+// Reply to a comment (threaded discussion)
+await contract.replyToComment(1, "I completely agree with your point!");
+
+// Like a post
+await contract.togglePostLike(1);
+
+// Like a comment
+await contract.toggleCommentLike(1);
+
+// Get user profile (includes comment count)
 const user = await contract.getUser("0x742d35Cc6bB7D0532728a0072Fb0714d");
 
 // Fetch latest posts
 const latestPosts = await contract.getLatestPosts(10);
 
-// Get user's post history
-const userPosts = await contract.getUserPosts(userAddress);
+// Get all comments for a post
+const postComments = await contract.getPostComments(1);
+
+// Get replies to a specific comment
+const replies = await contract.getCommentReplies(1);
+
+// Get user's comment history
+const userComments = await contract.getUserComments(userAddress);
+
+// Check platform statistics
+const [totalUsers, totalPosts, totalComments] = await contract.getStats();
 ```
 
 ### Event Listening
@@ -236,9 +301,24 @@ contract.on("PostCreated", (postId, author, content) => {
     console.log(`New post #${postId} by ${author}: ${content}`);
 });
 
+// Listen for new comments
+contract.on("CommentCreated", (commentId, postId, author, content) => {
+    console.log(`New comment #${commentId} on post #${postId} by ${author}: ${content}`);
+});
+
+// Listen for replies
+contract.on("ReplyCreated", (replyId, parentCommentId, author, content) => {
+    console.log(`New reply #${replyId} to comment #${parentCommentId} by ${author}: ${content}`);
+});
+
 // Listen for post likes
 contract.on("PostLiked", (postId, liker) => {
     console.log(`Post #${postId} liked by ${liker}`);
+});
+
+// Listen for comment likes
+contract.on("CommentLiked", (commentId, liker) => {
+    console.log(`Comment #${commentId} liked by ${liker}`);
 });
 ```
 
@@ -262,7 +342,8 @@ npm run coverage
 ### Test Coverage
 - ✅ **User Registration** - Registration validation and edge cases
 - ✅ **Post Creation** - Content validation and user restrictions  
-- ✅ **Social Interactions** - Like/unlike functionality and spam prevention
+- ✅ **Comment System** - Comment creation, replies, and threading
+- ✅ **Social Interactions** - Like/unlike functionality for posts and comments
 - ✅ **View Functions** - Data retrieval and pagination
 - ✅ **Security Tests** - Access control and input validation
 - ✅ **Edge Cases** - Boundary conditions and error handling
@@ -271,16 +352,17 @@ npm run coverage
 
 ### Smart Contract Security
 - **✅ Access Control** - Role-based permissions with modifiers
-- **✅ Input Validation** - Comprehensive input sanitization
+- **✅ Input Validation** - Comprehensive input sanitization for posts and comments
 - **✅ Reentrancy Protection** - Guards against reentrancy attacks
 - **✅ Gas Optimization** - Efficient storage and computation patterns
 - **✅ Event Logging** - Comprehensive event emission for transparency
+- **✅ Comment Validation** - Length limits and content validation for comments
 
 ### Best Practices Implemented
 - **Checks-Effects-Interactions** pattern
 - **OpenZeppelin** security standards
-- **Comprehensive testing** with edge cases
-- **Gas limit considerations** for all functions
+- **Comprehensive testing** with edge cases including comment system
+- **Gas limit considerations** for all functions including comment operations
 - **Emergency pause** mechanisms for critical issues
 
 ## 📊 Platform Statistics
@@ -288,9 +370,19 @@ npm run coverage
 ### Current Metrics (Live on Core Testnet 2)
 - **Total Users**: Dynamic (check contract)
 - **Total Posts**: Dynamic (check contract)  
+- **Total Comments**: Dynamic (check contract)
 - **Gas Optimization**: ~85% efficient vs naive implementation
-- **Test Coverage**: 95%+ code coverage
+- **Test Coverage**: 95%+ code coverage including comment system
 - **Security Score**: A+ (audited patterns)
+
+### Feature Completion Status
+- ✅ **User Registration & Profiles** - Complete
+- ✅ **Post Creation & Management** - Complete
+- ✅ **Like System** - Complete
+- ✅ **Comment System** - Complete
+- ✅ **Threaded Discussions** - Complete
+- ⏳ **Follow System** - In Development
+- ⏳ **Direct Messages** - Planned
 
 ## 🤝 Contributing
 
@@ -305,7 +397,7 @@ We welcome contributions from developers, designers, and blockchain enthusiasts!
 
 ### Development Guidelines
 - Follow **Solidity style guide**
-- Write **comprehensive tests** for new features
+- Write **comprehensive tests** for new features (including comment system tests)
 - Update **documentation** for API changes
 - Ensure **gas optimization** for new functions
 - Add **security considerations** for sensitive code
@@ -353,8 +445,10 @@ obtaining a copy of this software and associated documentation files...
 **Built with ❤️ for the decentralized future of social media**
 
 [⭐ Star this repo](https://github.com/your-username/decentralized-social-network) • [🍴 Fork it](https://github.com/your-username/decentralized-social-network/fork) • [📖 Read the docs](https://docs.yourdomain.com)
-<div align = "center">
-Contract Address - 0x1ea215c0debbf8dc0046fe9c98f735de48eae9e5 
+
+<div align="center">
+
+**Contract Address**: `0x1ea215c0debbf8dc0046fe9c98f735de48eae9e5`
     
 ![Screenshot (24)](https://github.com/user-attachments/assets/6757b65e-7df2-4202-9323-190eb47afa18)
 
