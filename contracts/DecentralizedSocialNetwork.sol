@@ -20,6 +20,8 @@ contract DecentralizedSocialNetwork {
         uint256 commentCount;
         uint256 followerCount;
         uint256 followingCount;
+        uint256 messagesSent;
+        uint256 messagesReceived;
         bool exists;
     }
 
@@ -35,9 +37,29 @@ contract DecentralizedSocialNetwork {
         bool exists;
     }
 
+    struct DirectMessage {
+        uint256 id;
+        address sender;
+        address recipient;
+        string encryptedContent; // Encrypted message content
+        uint256 timestamp;
+        bool isRead;
+        bool exists;
+    }
+
+    struct Conversation {
+        address user1;
+        address user2;
+        uint256 messageCount;
+        uint256 lastMessageId;
+        uint256 lastMessageTimestamp;
+        bool exists;
+    }
+
     mapping(address => User) public users;
     mapping(uint256 => Post) public posts;
     mapping(uint256 => Comment) public comments;
+    mapping(uint256 => DirectMessage) public messages;
     mapping(uint256 => mapping(address => bool)) public hasLikedPost;
     mapping(uint256 => mapping(address => bool)) public hasLikedComment;
     mapping(address => uint256[]) public userPosts;
@@ -52,10 +74,19 @@ contract DecentralizedSocialNetwork {
     mapping(address => mapping(address => uint256)) public followingIndex; // for efficient removal
     mapping(address => mapping(address => uint256)) public followerIndex; // for efficient removal
 
+    // Direct Messages Mappings
+    mapping(bytes32 => Conversation) public conversations; // conversationId => Conversation
+    mapping(bytes32 => uint256[]) public conversationMessages; // conversationId => messageIds
+    mapping(address => bytes32[]) public userConversations; // user => conversationIds
+    mapping(address => uint256[]) public userSentMessages; // user => sentMessageIds
+    mapping(address => uint256[]) public userReceivedMessages; // user => receivedMessageIds
+    mapping(address => uint256) public unreadMessageCount; // user => unread count
+
     uint256 public totalPosts;
     uint256 public totalUsers;
     uint256 public totalComments;
     uint256 public totalFollowRelations;
+    uint256 public totalMessages;
 
     event UserRegistered(address indexed user, string username);
     event PostCreated(uint256 indexed postId, address indexed author, string content);
@@ -67,6 +98,9 @@ contract DecentralizedSocialNetwork {
     event ReplyCreated(uint256 indexed replyId, uint256 indexed parentCommentId, address indexed author, string content);
     event UserFollowed(address indexed follower, address indexed following);
     event UserUnfollowed(address indexed follower, address indexed unfollowing);
+    event MessageSent(uint256 indexed messageId, address indexed sender, address indexed recipient, bytes32 indexed conversationId);
+    event MessageRead(uint256 indexed messageId, address indexed reader);
+    event ConversationStarted(bytes32 indexed conversationId, address indexed user1, address indexed user2);
 
     modifier onlyRegisteredUser() {
         require(users[msg.sender].exists, "User not registered");
@@ -88,6 +122,21 @@ contract DecentralizedSocialNetwork {
         _;
     }
 
+    modifier validMessage(uint256 _messageId) {
+        require(messages[_messageId].exists, "Message does not exist");
+        _;
+    }
+
+    // Generate conversation ID between two users
+    function getConversationId(address _user1, address _user2) public pure returns (bytes32) {
+        // Ensure consistent ordering to generate same ID regardless of parameter order
+        if (_user1 < _user2) {
+            return keccak256(abi.encodePacked(_user1, _user2));
+        } else {
+            return keccak256(abi.encodePacked(_user2, _user1));
+        }
+    }
+
     // Register a new user
     function registerUser(string memory _username, string memory _bio) external {
         require(!users[msg.sender].exists, "User already registered");
@@ -103,6 +152,8 @@ contract DecentralizedSocialNetwork {
             commentCount: 0,
             followerCount: 0,
             followingCount: 0,
+            messagesSent: 0,
+            messagesReceived: 0,
             exists: true
         });
 
@@ -276,6 +327,94 @@ contract DecentralizedSocialNetwork {
         emit UserUnfollowed(msg.sender, _userToUnfollow);
     }
 
+    // Send a direct message
+    function sendDirectMessage(address _recipient, string memory _encryptedContent) external onlyRegisteredUser validUser(_recipient) {
+        require(_recipient != msg.sender, "Cannot send message to yourself");
+        require(bytes(_encryptedContent).length > 0, "Message cannot be empty");
+        require(bytes(_encryptedContent).length <= 1000, "Message too long");
+
+        bytes32 conversationId = getConversationId(msg.sender, _recipient);
+        uint256 messageId = totalMessages++;
+
+        // Create the message
+        messages[messageId] = DirectMessage({
+            id: messageId,
+            sender: msg.sender,
+            recipient: _recipient,
+            encryptedContent: _encryptedContent,
+            timestamp: block.timestamp,
+            isRead: false,
+            exists: true
+        });
+
+        // Initialize conversation if it doesn't exist
+        if (!conversations[conversationId].exists) {
+            conversations[conversationId] = Conversation({
+                user1: msg.sender < _recipient ? msg.sender : _recipient,
+                user2: msg.sender < _recipient ? _recipient : msg.sender,
+                messageCount: 0,
+                lastMessageId: 0,
+                lastMessageTimestamp: 0,
+                exists: true
+            });
+
+            userConversations[msg.sender].push(conversationId);
+            userConversations[_recipient].push(conversationId);
+            
+            emit ConversationStarted(conversationId, msg.sender, _recipient);
+        }
+
+        // Update conversation
+        conversations[conversationId].messageCount++;
+        conversations[conversationId].lastMessageId = messageId;
+        conversations[conversationId].lastMessageTimestamp = block.timestamp;
+
+        // Update message arrays
+        conversationMessages[conversationId].push(messageId);
+        userSentMessages[msg.sender].push(messageId);
+        userReceivedMessages[_recipient].push(messageId);
+
+        // Update user stats
+        users[msg.sender].messagesSent++;
+        users[_recipient].messagesReceived++;
+        unreadMessageCount[_recipient]++;
+        totalMessages++;
+
+        emit MessageSent(messageId, msg.sender, _recipient, conversationId);
+    }
+
+    // Mark a message as read
+    function markMessageAsRead(uint256 _messageId) external onlyRegisteredUser validMessage(_messageId) {
+        DirectMessage storage message = messages[_messageId];
+        require(message.recipient == msg.sender, "Can only mark your own received messages as read");
+        require(!message.isRead, "Message already marked as read");
+
+        message.isRead = true;
+        unreadMessageCount[msg.sender]--;
+
+        emit MessageRead(_messageId, msg.sender);
+    }
+
+    // Mark all messages in a conversation as read
+    function markConversationAsRead(bytes32 _conversationId) external onlyRegisteredUser {
+        require(conversations[_conversationId].exists, "Conversation does not exist");
+        
+        address user1 = conversations[_conversationId].user1;
+        address user2 = conversations[_conversationId].user2;
+        require(msg.sender == user1 || msg.sender == user2, "Not a participant in this conversation");
+
+        uint256[] memory messageIds = conversationMessages[_conversationId];
+        
+        for (uint256 i = 0; i < messageIds.length; i++) {
+            DirectMessage storage message = messages[messageIds[i]];
+            if (message.recipient == msg.sender && !message.isRead) {
+                message.isRead = true;
+                unreadMessageCount[msg.sender]--;
+                emit MessageRead(messageIds[i], msg.sender);
+            }
+        }
+    }
+
     // Get a user profile
     function getUser(address _userAddress) external view returns (User memory) {
         require(users[_userAddress].exists, "User does not exist");
@@ -292,6 +431,21 @@ contract DecentralizedSocialNetwork {
     function getComment(uint256 _commentId) external view returns (Comment memory) {
         require(comments[_commentId].exists, "Comment does not exist");
         return comments[_commentId];
+    }
+
+    // Get a direct message
+    function getMessage(uint256 _messageId) external view validMessage(_messageId) returns (DirectMessage memory) {
+        DirectMessage memory message = messages[_messageId];
+        require(message.sender == msg.sender || message.recipient == msg.sender, "Not authorized to view this message");
+        return message;
+    }
+
+    // Get conversation details
+    function getConversation(bytes32 _conversationId) external view returns (Conversation memory) {
+        require(conversations[_conversationId].exists, "Conversation does not exist");
+        Conversation memory conversation = conversations[_conversationId];
+        require(msg.sender == conversation.user1 || msg.sender == conversation.user2, "Not a participant in this conversation");
+        return conversation;
     }
 
     // Get all post IDs of a user
@@ -336,6 +490,70 @@ contract DecentralizedSocialNetwork {
     // Get users that a user is following
     function getFollowing(address _userAddress) external view validUser(_userAddress) returns (address[] memory) {
         return following[_userAddress];
+    }
+
+    // Get user's conversations
+    function getUserConversations() external view onlyRegisteredUser returns (bytes32[] memory) {
+        return userConversations[msg.sender];
+    }
+
+    // Get messages in a conversation
+    function getConversationMessages(bytes32 _conversationId, uint256 _limit) external view returns (DirectMessage[] memory) {
+        require(conversations[_conversationId].exists, "Conversation does not exist");
+        
+        address user1 = conversations[_conversationId].user1;
+        address user2 = conversations[_conversationId].user2;
+        require(msg.sender == user1 || msg.sender == user2, "Not a participant in this conversation");
+
+        uint256[] memory messageIds = conversationMessages[_conversationId];
+        uint256 resultCount = _limit > 0 && _limit < messageIds.length ? _limit : messageIds.length;
+        
+        DirectMessage[] memory conversationMessagesArray = new DirectMessage[](resultCount);
+        
+        // Return latest messages (reverse order)
+        for (uint256 i = 0; i < resultCount; i++) {
+            uint256 messageIndex = messageIds.length - 1 - i;
+            conversationMessagesArray[i] = messages[messageIds[messageIndex]];
+        }
+
+        return conversationMessagesArray;
+    }
+
+    // Get unread message count for current user
+    function getUnreadMessageCount() external view onlyRegisteredUser returns (uint256) {
+        return unreadMessageCount[msg.sender];
+    }
+
+    // Get recent conversations with last message preview
+    function getRecentConversations(uint256 _limit) external view onlyRegisteredUser returns (bytes32[] memory, DirectMessage[] memory) {
+        bytes32[] memory userConversationIds = userConversations[msg.sender];
+        uint256 resultCount = _limit > 0 && _limit < userConversationIds.length ? _limit : userConversationIds.length;
+        
+        bytes32[] memory recentConversationIds = new bytes32[](resultCount);
+        DirectMessage[] memory lastMessages = new DirectMessage[](resultCount);
+        
+        // Sort conversations by last message timestamp (simple bubble sort for small arrays)
+        bytes32[] memory sortedIds = new bytes32[](userConversationIds.length);
+        for (uint256 i = 0; i < userConversationIds.length; i++) {
+            sortedIds[i] = userConversationIds[i];
+        }
+        
+        for (uint256 i = 0; i < sortedIds.length - 1; i++) {
+            for (uint256 j = 0; j < sortedIds.length - i - 1; j++) {
+                if (conversations[sortedIds[j]].lastMessageTimestamp < conversations[sortedIds[j + 1]].lastMessageTimestamp) {
+                    bytes32 temp = sortedIds[j];
+                    sortedIds[j] = sortedIds[j + 1];
+                    sortedIds[j + 1] = temp;
+                }
+            }
+        }
+        
+        for (uint256 i = 0; i < resultCount; i++) {
+            recentConversationIds[i] = sortedIds[i];
+            lastMessages[i] = messages[conversations[sortedIds[i]].lastMessageId];
+        }
+        
+        return (recentConversationIds, lastMessages);
     }
 
     // Get follower count
@@ -445,8 +663,8 @@ contract DecentralizedSocialNetwork {
     }
 
     // Get total counts for dashboard/stats
-    function getStats() external view returns (uint256, uint256, uint256, uint256) {
-        return (totalUsers, totalPosts, totalComments, totalFollowRelations);
+    function getStats() external view returns (uint256, uint256, uint256, uint256, uint256) {
+        return (totalUsers, totalPosts, totalComments, totalFollowRelations, totalMessages);
     }
 
     // Get mutual followers between two users
@@ -482,8 +700,3 @@ contract DecentralizedSocialNetwork {
         return mutualFollowers;
     }
 }
-
-
-
-
-
