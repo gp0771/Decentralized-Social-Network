@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
 contract DecentralizedSocialNetwork {
@@ -6,6 +6,7 @@ contract DecentralizedSocialNetwork {
         uint256 id;
         address author;
         string content;
+        string[] tags; // Array of tags for this post
         uint256 timestamp;
         uint256 likes;
         uint256 commentCount;
@@ -56,6 +57,14 @@ contract DecentralizedSocialNetwork {
         bool exists;
     }
 
+    struct Tag {
+        string name;
+        uint256 postCount;
+        uint256 createdTimestamp;
+        address creator;
+        bool exists;
+    }
+
     mapping(address => User) public users;
     mapping(uint256 => Post) public posts;
     mapping(uint256 => Comment) public comments;
@@ -82,14 +91,25 @@ contract DecentralizedSocialNetwork {
     mapping(address => uint256[]) public userReceivedMessages; // user => receivedMessageIds
     mapping(address => uint256) public unreadMessageCount; // user => unread count
 
+    // Tag System Mappings
+    mapping(string => Tag) public tags; // tagName => Tag struct
+    mapping(string => uint256[]) public tagPosts; // tagName => postIds
+    mapping(uint256 => mapping(string => bool)) public postHasTag; // postId => tagName => bool
+    string[] public allTags; // Array of all tag names
+    mapping(string => uint256) public tagIndex; // tagName => index in allTags array
+
     uint256 public totalPosts;
     uint256 public totalUsers;
     uint256 public totalComments;
     uint256 public totalFollowRelations;
     uint256 public totalMessages;
+    uint256 public totalTags;
+
+    uint256 public constant MAX_TAGS_PER_POST = 5;
+    uint256 public constant MAX_TAG_LENGTH = 30;
 
     event UserRegistered(address indexed user, string username);
-    event PostCreated(uint256 indexed postId, address indexed author, string content);
+    event PostCreated(uint256 indexed postId, address indexed author, string content, string[] tags);
     event PostLiked(uint256 indexed postId, address indexed liker);
     event PostUnliked(uint256 indexed postId, address indexed unliker);
     event CommentCreated(uint256 indexed commentId, uint256 indexed postId, address indexed author, string content);
@@ -101,6 +121,8 @@ contract DecentralizedSocialNetwork {
     event MessageSent(uint256 indexed messageId, address indexed sender, address indexed recipient, bytes32 indexed conversationId);
     event MessageRead(uint256 indexed messageId, address indexed reader);
     event ConversationStarted(bytes32 indexed conversationId, address indexed user1, address indexed user2);
+    event TagCreated(string indexed tagName, address indexed creator);
+    event PostTagged(uint256 indexed postId, string indexed tagName);
 
     modifier onlyRegisteredUser() {
         require(users[msg.sender].exists, "User not registered");
@@ -127,6 +149,11 @@ contract DecentralizedSocialNetwork {
         _;
     }
 
+    modifier validTag(string memory _tagName) {
+        require(tags[_tagName].exists, "Tag does not exist");
+        _;
+    }
+
     // Generate conversation ID between two users
     function getConversationId(address _user1, address _user2) public pure returns (bytes32) {
         // Ensure consistent ordering to generate same ID regardless of parameter order
@@ -135,6 +162,31 @@ contract DecentralizedSocialNetwork {
         } else {
             return keccak256(abi.encodePacked(_user2, _user1));
         }
+    }
+
+    // Validate and format tag name
+    function formatTag(string memory _tag) internal pure returns (string memory) {
+        bytes memory tagBytes = bytes(_tag);
+        require(tagBytes.length > 0, "Tag cannot be empty");
+        require(tagBytes.length <= MAX_TAG_LENGTH, "Tag too long");
+        
+        // Convert to lowercase and remove spaces (simple validation)
+        for (uint256 i = 0; i < tagBytes.length; i++) {
+            require(
+                (tagBytes[i] >= 0x30 && tagBytes[i] <= 0x39) || // 0-9
+                (tagBytes[i] >= 0x61 && tagBytes[i] <= 0x7A) || // a-z
+                (tagBytes[i] >= 0x41 && tagBytes[i] <= 0x5A) || // A-Z
+                tagBytes[i] == 0x5F, // underscore
+                "Tag contains invalid characters"
+            );
+            
+            // Convert uppercase to lowercase
+            if (tagBytes[i] >= 0x41 && tagBytes[i] <= 0x5A) {
+                tagBytes[i] = bytes1(uint8(tagBytes[i]) + 32);
+            }
+        }
+        
+        return string(tagBytes);
     }
 
     // Register a new user
@@ -161,26 +213,72 @@ contract DecentralizedSocialNetwork {
         emit UserRegistered(msg.sender, _username);
     }
 
-    // Create a new post
-    function createPost(string memory _content) external onlyRegisteredUser {
+    // Create a new post with tags
+    function createPost(string memory _content, string[] memory _tags) external onlyRegisteredUser {
         require(bytes(_content).length > 0, "Content cannot be empty");
         require(bytes(_content).length <= 1000, "Content too long");
+        require(_tags.length <= MAX_TAGS_PER_POST, "Too many tags");
 
         uint256 postId = totalPosts++;
+        
+        // Format and validate tags
+        string[] memory formattedTags = new string[](_tags.length);
+        for (uint256 i = 0; i < _tags.length; i++) {
+            formattedTags[i] = formatTag(_tags[i]);
+            
+            // Check for duplicate tags in this post
+            for (uint256 j = 0; j < i; j++) {
+                require(
+                    keccak256(abi.encodePacked(formattedTags[i])) != keccak256(abi.encodePacked(formattedTags[j])),
+                    "Duplicate tags not allowed"
+                );
+            }
+        }
+
         posts[postId] = Post({
             id: postId,
             author: msg.sender,
             content: _content,
+            tags: formattedTags,
             timestamp: block.timestamp,
             likes: 0,
             commentCount: 0,
             exists: true
         });
 
+        // Process tags
+        for (uint256 i = 0; i < formattedTags.length; i++) {
+            string memory tagName = formattedTags[i];
+            
+            // Create tag if it doesn't exist
+            if (!tags[tagName].exists) {
+                tags[tagName] = Tag({
+                    name: tagName,
+                    postCount: 0,
+                    createdTimestamp: block.timestamp,
+                    creator: msg.sender,
+                    exists: true
+                });
+                
+                allTags.push(tagName);
+                tagIndex[tagName] = allTags.length - 1;
+                totalTags++;
+                
+                emit TagCreated(tagName, msg.sender);
+            }
+            
+            // Add post to tag
+            tagPosts[tagName].push(postId);
+            postHasTag[postId][tagName] = true;
+            tags[tagName].postCount++;
+            
+            emit PostTagged(postId, tagName);
+        }
+
         userPosts[msg.sender].push(postId);
         users[msg.sender].postCount++;
 
-        emit PostCreated(postId, msg.sender, _content);
+        emit PostCreated(postId, msg.sender, _content, formattedTags);
     }
 
     // Like or Unlike a post
@@ -413,6 +511,132 @@ contract DecentralizedSocialNetwork {
                 emit MessageRead(messageIds[i], msg.sender);
             }
         }
+    }
+
+    // Get posts by tag with pagination
+    function getPostsByTag(string memory _tagName, uint256 _limit) external view validTag(_tagName) returns (Post[] memory) {
+        require(_limit > 0 && _limit <= 50, "Limit must be between 1 and 50");
+
+        uint256[] memory postIds = tagPosts[_tagName];
+        uint256 resultCount = _limit > postIds.length ? postIds.length : _limit;
+        Post[] memory taggedPosts = new Post[](resultCount);
+
+        // Return latest posts (reverse order)
+        for (uint256 i = 0; i < resultCount; i++) {
+            uint256 postIndex = postIds.length - 1 - i;
+            taggedPosts[i] = posts[postIds[postIndex]];
+        }
+
+        return taggedPosts;
+    }
+
+    // Get trending tags (sorted by post count)
+    function getTrendingTags(uint256 _limit) external view returns (string[] memory, uint256[] memory) {
+        require(_limit > 0 && _limit <= 100, "Limit must be between 1 and 100");
+
+        uint256 resultCount = _limit > allTags.length ? allTags.length : _limit;
+        string[] memory trendingTagNames = new string[](resultCount);
+        uint256[] memory postCounts = new uint256[](resultCount);
+
+        // Simple sorting by post count (descending)
+        string[] memory sortedTags = new string[](allTags.length);
+        uint256[] memory sortedCounts = new uint256[](allTags.length);
+
+        for (uint256 i = 0; i < allTags.length; i++) {
+            sortedTags[i] = allTags[i];
+            sortedCounts[i] = tags[allTags[i]].postCount;
+        }
+
+        // Bubble sort (simple for demonstration)
+        for (uint256 i = 0; i < sortedTags.length - 1; i++) {
+            for (uint256 j = 0; j < sortedTags.length - i - 1; j++) {
+                if (sortedCounts[j] < sortedCounts[j + 1]) {
+                    // Swap counts
+                    uint256 tempCount = sortedCounts[j];
+                    sortedCounts[j] = sortedCounts[j + 1];
+                    sortedCounts[j + 1] = tempCount;
+                    
+                    // Swap tag names
+                    string memory tempTag = sortedTags[j];
+                    sortedTags[j] = sortedTags[j + 1];
+                    sortedTags[j + 1] = tempTag;
+                }
+            }
+        }
+
+        for (uint256 i = 0; i < resultCount; i++) {
+            trendingTagNames[i] = sortedTags[i];
+            postCounts[i] = sortedCounts[i];
+        }
+
+        return (trendingTagNames, postCounts);
+    }
+
+    // Get all tags (for discovery)
+    function getAllTags() external view returns (string[] memory) {
+        return allTags;
+    }
+
+    // Get tag details
+    function getTag(string memory _tagName) external view validTag(_tagName) returns (Tag memory) {
+        return tags[_tagName];
+    }
+
+    // Search posts by multiple tags (AND operation)
+    function searchPostsByTags(string[] memory _tagNames, uint256 _limit) external view returns (Post[] memory) {
+        require(_tagNames.length > 0 && _tagNames.length <= 5, "Invalid number of tags");
+        require(_limit > 0 && _limit <= 50, "Limit must be between 1 and 50");
+
+        // Validate all tags exist
+        for (uint256 i = 0; i < _tagNames.length; i++) {
+            require(tags[_tagNames[i]].exists, "One or more tags do not exist");
+        }
+
+        // Find posts that have ALL specified tags
+        uint256[] memory candidatePosts = tagPosts[_tagNames[0]];
+        uint256 matchCount = 0;
+
+        // Count matches first
+        for (uint256 i = 0; i < candidatePosts.length; i++) {
+            uint256 postId = candidatePosts[i];
+            bool hasAllTags = true;
+
+            for (uint256 j = 1; j < _tagNames.length; j++) {
+                if (!postHasTag[postId][_tagNames[j]]) {
+                    hasAllTags = false;
+                    break;
+                }
+            }
+
+            if (hasAllTags) {
+                matchCount++;
+            }
+        }
+
+        // Create result array
+        uint256 resultCount = _limit > matchCount ? matchCount : _limit;
+        Post[] memory matchingPosts = new Post[](resultCount);
+        uint256 resultIndex = 0;
+
+        // Fill result array (latest first)
+        for (uint256 i = candidatePosts.length; i > 0 && resultIndex < resultCount; i--) {
+            uint256 postId = candidatePosts[i - 1];
+            bool hasAllTags = true;
+
+            for (uint256 j = 1; j < _tagNames.length; j++) {
+                if (!postHasTag[postId][_tagNames[j]]) {
+                    hasAllTags = false;
+                    break;
+                }
+            }
+
+            if (hasAllTags) {
+                matchingPosts[resultIndex] = posts[postId];
+                resultIndex++;
+            }
+        }
+
+        return matchingPosts;
     }
 
     // Get a user profile
@@ -663,8 +887,8 @@ contract DecentralizedSocialNetwork {
     }
 
     // Get total counts for dashboard/stats
-    function getStats() external view returns (uint256, uint256, uint256, uint256, uint256) {
-        return (totalUsers, totalPosts, totalComments, totalFollowRelations, totalMessages);
+    function getStats() external view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
+        return (totalUsers, totalPosts, totalComments, totalFollowRelations, totalMessages, totalTags);
     }
 
     // Get mutual followers between two users
@@ -700,4 +924,3 @@ contract DecentralizedSocialNetwork {
         return mutualFollowers;
     }
 }
-
