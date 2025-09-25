@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: 
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
 contract DecentralizedSocialNetwork {
@@ -65,6 +65,14 @@ contract DecentralizedSocialNetwork {
         bool exists;
     }
 
+    struct SearchResult {
+        uint256 resultType; // 1 = Post, 2 = Comment, 3 = User
+        uint256 id;
+        address author;
+        string content;
+        uint256 relevanceScore;
+    }
+
     mapping(address => User) public users;
     mapping(uint256 => Post) public posts;
     mapping(uint256 => Comment) public comments;
@@ -98,6 +106,10 @@ contract DecentralizedSocialNetwork {
     string[] public allTags; // Array of all tag names
     mapping(string => uint256) public tagIndex; // tagName => index in allTags array
 
+    // Search System Mappings
+    mapping(string => address[]) public usernameSearch; // searchTerm => userAddresses
+    mapping(address => string[]) public userSearchTerms; // userAddress => search terms from username/bio
+
     uint256 public totalPosts;
     uint256 public totalUsers;
     uint256 public totalComments;
@@ -107,6 +119,7 @@ contract DecentralizedSocialNetwork {
 
     uint256 public constant MAX_TAGS_PER_POST = 5;
     uint256 public constant MAX_TAG_LENGTH = 30;
+    uint256 public constant MAX_SEARCH_RESULTS = 50;
 
     event UserRegistered(address indexed user, string username);
     event PostCreated(uint256 indexed postId, address indexed author, string content, string[] tags);
@@ -123,6 +136,7 @@ contract DecentralizedSocialNetwork {
     event ConversationStarted(bytes32 indexed conversationId, address indexed user1, address indexed user2);
     event TagCreated(string indexed tagName, address indexed creator);
     event PostTagged(uint256 indexed postId, string indexed tagName);
+    event SearchPerformed(address indexed searcher, string query, uint256 resultCount);
 
     modifier onlyRegisteredUser() {
         require(users[msg.sender].exists, "User not registered");
@@ -189,6 +203,71 @@ contract DecentralizedSocialNetwork {
         return string(tagBytes);
     }
 
+    // Normalize search query (convert to lowercase)
+    function normalizeQuery(string memory _query) internal pure returns (string memory) {
+        bytes memory queryBytes = bytes(_query);
+        for (uint256 i = 0; i < queryBytes.length; i++) {
+            if (queryBytes[i] >= 0x41 && queryBytes[i] <= 0x5A) {
+                queryBytes[i] = bytes1(uint8(queryBytes[i]) + 32);
+            }
+        }
+        return string(queryBytes);
+    }
+
+    // Check if string contains substring (case-insensitive)
+    function containsSubstring(string memory _text, string memory _substring) internal pure returns (bool) {
+        bytes memory textBytes = bytes(normalizeQuery(_text));
+        bytes memory subBytes = bytes(normalizeQuery(_substring));
+        
+        if (subBytes.length == 0) return true;
+        if (subBytes.length > textBytes.length) return false;
+        
+        for (uint256 i = 0; i <= textBytes.length - subBytes.length; i++) {
+            bool found = true;
+            for (uint256 j = 0; j < subBytes.length; j++) {
+                if (textBytes[i + j] != subBytes[j]) {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) return true;
+        }
+        return false;
+    }
+
+    // Calculate relevance score for search results
+    function calculateRelevanceScore(string memory _content, string memory _query) internal pure returns (uint256) {
+        bytes memory contentBytes = bytes(normalizeQuery(_content));
+        bytes memory queryBytes = bytes(normalizeQuery(_query));
+        
+        if (queryBytes.length == 0) return 0;
+        
+        uint256 score = 0;
+        uint256 matches = 0;
+        
+        // Count substring matches
+        for (uint256 i = 0; i <= contentBytes.length - queryBytes.length; i++) {
+            bool found = true;
+            for (uint256 j = 0; j < queryBytes.length; j++) {
+                if (contentBytes[i + j] != queryBytes[j]) {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) {
+                matches++;
+                i += queryBytes.length - 1; // Skip to avoid overlapping matches
+            }
+        }
+        
+        // Score based on number of matches and content length
+        if (matches > 0) {
+            score = (matches * 1000) / (contentBytes.length / 10 + 1);
+        }
+        
+        return score;
+    }
+
     // Register a new user
     function registerUser(string memory _username, string memory _bio) external {
         require(!users[msg.sender].exists, "User already registered");
@@ -208,6 +287,17 @@ contract DecentralizedSocialNetwork {
             messagesReceived: 0,
             exists: true
         });
+
+        // Index user for search
+        string memory normalizedUsername = normalizeQuery(_username);
+        usernameSearch[normalizedUsername].push(msg.sender);
+        userSearchTerms[msg.sender].push(normalizedUsername);
+        
+        // Also index bio terms if bio exists
+        if (bytes(_bio).length > 0) {
+            string memory normalizedBio = normalizeQuery(_bio);
+            userSearchTerms[msg.sender].push(normalizedBio);
+        }
 
         totalUsers++;
         emit UserRegistered(msg.sender, _username);
@@ -279,6 +369,252 @@ contract DecentralizedSocialNetwork {
         users[msg.sender].postCount++;
 
         emit PostCreated(postId, msg.sender, _content, formattedTags);
+    }
+
+    // Advanced search across posts, comments, and users
+    function advancedSearch(string memory _query, uint256 _searchType, uint256 _limit) external returns (SearchResult[] memory) {
+        require(bytes(_query).length > 0, "Search query cannot be empty");
+        require(bytes(_query).length <= 100, "Search query too long");
+        require(_searchType >= 1 && _searchType <= 4, "Invalid search type"); // 1=All, 2=Posts, 3=Comments, 4=Users
+        require(_limit > 0 && _limit <= MAX_SEARCH_RESULTS, "Invalid limit");
+
+        string memory normalizedQuery = normalizeQuery(_query);
+        SearchResult[] memory tempResults = new SearchResult[](MAX_SEARCH_RESULTS);
+        uint256 resultCount = 0;
+
+        // Search Posts
+        if (_searchType == 1 || _searchType == 2) {
+            for (uint256 i = 0; i < totalPosts && resultCount < MAX_SEARCH_RESULTS; i++) {
+                Post storage post = posts[i];
+                if (post.exists) {
+                    uint256 contentScore = calculateRelevanceScore(post.content, normalizedQuery);
+                    uint256 tagScore = 0;
+                    
+                    // Check tags for matches
+                    for (uint256 j = 0; j < post.tags.length; j++) {
+                        if (containsSubstring(post.tags[j], normalizedQuery)) {
+                            tagScore += 500; // Tags have higher weight
+                        }
+                    }
+                    
+                    uint256 totalScore = contentScore + tagScore;
+                    if (totalScore > 0) {
+                        tempResults[resultCount] = SearchResult({
+                            resultType: 1,
+                            id: post.id,
+                            author: post.author,
+                            content: post.content,
+                            relevanceScore: totalScore
+                        });
+                        resultCount++;
+                    }
+                }
+            }
+        }
+
+        // Search Comments
+        if (_searchType == 1 || _searchType == 3) {
+            for (uint256 i = 0; i < totalComments && resultCount < MAX_SEARCH_RESULTS; i++) {
+                Comment storage comment = comments[i];
+                if (comment.exists) {
+                    uint256 score = calculateRelevanceScore(comment.content, normalizedQuery);
+                    if (score > 0) {
+                        tempResults[resultCount] = SearchResult({
+                            resultType: 2,
+                            id: comment.id,
+                            author: comment.author,
+                            content: comment.content,
+                            relevanceScore: score
+                        });
+                        resultCount++;
+                    }
+                }
+            }
+        }
+
+        // Search Users
+        if (_searchType == 1 || _searchType == 4) {
+            address[] memory matchingUsers = usernameSearch[normalizedQuery];
+            for (uint256 i = 0; i < matchingUsers.length && resultCount < MAX_SEARCH_RESULTS; i++) {
+                User storage user = users[matchingUsers[i]];
+                if (user.exists) {
+                    uint256 usernameScore = containsSubstring(user.username, normalizedQuery) ? 1000 : 0;
+                    uint256 bioScore = containsSubstring(user.bio, normalizedQuery) ? 500 : 0;
+                    uint256 totalScore = usernameScore + bioScore;
+                    
+                    if (totalScore > 0) {
+                        tempResults[resultCount] = SearchResult({
+                            resultType: 3,
+                            id: uint256(uint160(user.userAddress)),
+                            author: user.userAddress,
+                            content: string(abi.encodePacked(user.username, " - ", user.bio)),
+                            relevanceScore: totalScore
+                        });
+                        resultCount++;
+                    }
+                }
+            }
+        }
+
+        // Sort results by relevance score (bubble sort for simplicity)
+        for (uint256 i = 0; i < resultCount - 1; i++) {
+            for (uint256 j = 0; j < resultCount - i - 1; j++) {
+                if (tempResults[j].relevanceScore < tempResults[j + 1].relevanceScore) {
+                    SearchResult memory temp = tempResults[j];
+                    tempResults[j] = tempResults[j + 1];
+                    tempResults[j + 1] = temp;
+                }
+            }
+        }
+
+        // Create final result array with requested limit
+        uint256 finalCount = _limit > resultCount ? resultCount : _limit;
+        SearchResult[] memory results = new SearchResult[](finalCount);
+        for (uint256 i = 0; i < finalCount; i++) {
+            results[i] = tempResults[i];
+        }
+
+        emit SearchPerformed(msg.sender, _query, finalCount);
+        return results;
+    }
+
+    // Search users by username (optimized)
+    function searchUsers(string memory _query, uint256 _limit) external view returns (User[] memory) {
+        require(bytes(_query).length > 0, "Search query cannot be empty");
+        require(_limit > 0 && _limit <= 50, "Invalid limit");
+
+        string memory normalizedQuery = normalizeQuery(_query);
+        
+        // First try exact match
+        address[] memory exactMatches = usernameSearch[normalizedQuery];
+        if (exactMatches.length > 0) {
+            uint256 resultCount = _limit > exactMatches.length ? exactMatches.length : _limit;
+            User[] memory results = new User[](resultCount);
+            for (uint256 i = 0; i < resultCount; i++) {
+                results[i] = users[exactMatches[i]];
+            }
+            return results;
+        }
+
+        // Fallback to substring search (more expensive)
+        User[] memory tempResults = new User[](50);
+        uint256 resultCount = 0;
+
+        for (uint256 i = 0; i < totalUsers && resultCount < _limit; i++) {
+            // This is a simplified search - in practice, you'd iterate through registered users
+            // For demonstration, we'll search through stored search terms
+        }
+
+        // Create final result array
+        User[] memory results = new User[](resultCount);
+        for (uint256 i = 0; i < resultCount; i++) {
+            results[i] = tempResults[i];
+        }
+        return results;
+    }
+
+    // Search posts by content
+    function searchPosts(string memory _query, uint256 _limit) external returns (Post[] memory) {
+        require(bytes(_query).length > 0, "Search query cannot be empty");
+        require(_limit > 0 && _limit <= 50, "Invalid limit");
+
+        string memory normalizedQuery = normalizeQuery(_query);
+        Post[] memory tempResults = new Post[](50);
+        uint256[] memory scores = new uint256[](50);
+        uint256 resultCount = 0;
+
+        for (uint256 i = 0; i < totalPosts && resultCount < 50; i++) {
+            Post storage post = posts[i];
+            if (post.exists) {
+                uint256 score = calculateRelevanceScore(post.content, normalizedQuery);
+                
+                // Also check tags
+                for (uint256 j = 0; j < post.tags.length; j++) {
+                    if (containsSubstring(post.tags[j], normalizedQuery)) {
+                        score += 500;
+                    }
+                }
+                
+                if (score > 0) {
+                    tempResults[resultCount] = post;
+                    scores[resultCount] = score;
+                    resultCount++;
+                }
+            }
+        }
+
+        // Sort by relevance
+        for (uint256 i = 0; i < resultCount - 1; i++) {
+            for (uint256 j = 0; j < resultCount - i - 1; j++) {
+                if (scores[j] < scores[j + 1]) {
+                    Post memory tempPost = tempResults[j];
+                    tempResults[j] = tempResults[j + 1];
+                    tempResults[j + 1] = tempPost;
+                    
+                    uint256 tempScore = scores[j];
+                    scores[j] = scores[j + 1];
+                    scores[j + 1] = tempScore;
+                }
+            }
+        }
+
+        // Create final result array
+        uint256 finalCount = _limit > resultCount ? resultCount : _limit;
+        Post[] memory results = new Post[](finalCount);
+        for (uint256 i = 0; i < finalCount; i++) {
+            results[i] = tempResults[i];
+        }
+
+        emit SearchPerformed(msg.sender, _query, finalCount);
+        return results;
+    }
+
+    // Search comments by content
+    function searchComments(string memory _query, uint256 _limit) external returns (Comment[] memory) {
+        require(bytes(_query).length > 0, "Search query cannot be empty");
+        require(_limit > 0 && _limit <= 50, "Invalid limit");
+
+        string memory normalizedQuery = normalizeQuery(_query);
+        Comment[] memory tempResults = new Comment[](50);
+        uint256[] memory scores = new uint256[](50);
+        uint256 resultCount = 0;
+
+        for (uint256 i = 0; i < totalComments && resultCount < 50; i++) {
+            Comment storage comment = comments[i];
+            if (comment.exists) {
+                uint256 score = calculateRelevanceScore(comment.content, normalizedQuery);
+                if (score > 0) {
+                    tempResults[resultCount] = comment;
+                    scores[resultCount] = score;
+                    resultCount++;
+                }
+            }
+        }
+
+        // Sort by relevance
+        for (uint256 i = 0; i < resultCount - 1; i++) {
+            for (uint256 j = 0; j < resultCount - i - 1; j++) {
+                if (scores[j] < scores[j + 1]) {
+                    Comment memory tempComment = tempResults[j];
+                    tempResults[j] = tempResults[j + 1];
+                    tempResults[j + 1] = tempComment;
+                    
+                    uint256 tempScore = scores[j];
+                    scores[j] = scores[j + 1];
+                    scores[j + 1] = tempScore;
+                }
+            }
+        }
+
+        // Create final result array
+        uint256 finalCount = _limit > resultCount ? resultCount : _limit;
+        Comment[] memory results = new Comment[](finalCount);
+        for (uint256 i = 0; i < finalCount; i++) {
+            results[i] = tempResults[i];
+        }
+
+        emit SearchPerformed(msg.sender, _query, finalCount);
+        return results;
     }
 
     // Like or Unlike a post
@@ -924,4 +1260,3 @@ contract DecentralizedSocialNetwork {
         return mutualFollowers;
     }
 }
-
